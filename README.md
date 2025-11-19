@@ -36,10 +36,120 @@ Compare the output of your CUDA Sobel filter with a CPU-based Sobel filter imple
 Discuss the differences in execution time and output quality.
 
 ## PROGRAM:
-TYPE YOUR CODE HERE
+```c
+%%writefile sobel_cuda.cu
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+#include <cuda_runtime.h>
+#include <opencv2/opencv.hpp>
+#include <chrono>
 
+using namespace cv;
+
+__global__ void sobelFilter(unsigned char *srcImage, unsigned char *dstImage,
+                            unsigned int width, unsigned int height) {
+
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x >= 1 && x < width - 1 && y >= 1 && y < height - 1) {
+        int Gx[3][3] = {{-1, 0, 1}, {-2, 0, 2}, {-1, 0, 1}};
+        int Gy[3][3] = {{1, 2, 1}, {0, 0, 0}, {-1, -2, -1}};
+
+        int sumX = 0, sumY = 0;
+
+        for (int i = -1; i <= 1; i++) {
+            for (int j = -1; j <= 1; j++) {
+                unsigned char pixel = srcImage[(y + i) * width + (x + j)];
+                sumX += pixel * Gx[i + 1][j + 1];
+                sumY += pixel * Gy[i + 1][j + 1];
+            }
+        }
+
+        int magnitude = sqrtf(float(sumX * sumX + sumY * sumY));
+        magnitude = min(max(magnitude, 0), 255);
+        dstImage[y * width + x] = (unsigned char)magnitude;
+    }
+}
+
+void checkCudaErrors(cudaError_t r) {
+    if (r != cudaSuccess) {
+        fprintf(stderr, "CUDA Error: %s\n", cudaGetErrorString(r));
+        exit(EXIT_FAILURE);
+    }
+}
+
+int main() {
+
+    Mat image = imread("creative2.jpg", IMREAD_COLOR);
+    if (image.empty()) {
+        printf("Error: Image not found at /content/image.jpg\n");
+        return -1;
+    }
+
+    Mat grayImage;
+    cvtColor(image, grayImage, COLOR_BGR2GRAY);
+
+    int width = grayImage.cols;
+    int height = grayImage.rows;
+    size_t imageSize = width * height * sizeof(unsigned char);
+
+    unsigned char *h_outputImage = (unsigned char *)malloc(imageSize);
+
+    unsigned char *d_inputImage, *d_outputImage;
+    checkCudaErrors(cudaMalloc(&d_inputImage, imageSize));
+    checkCudaErrors(cudaMalloc(&d_outputImage, imageSize));
+    checkCudaErrors(cudaMemcpy(d_inputImage, grayImage.data, imageSize, cudaMemcpyHostToDevice));
+
+    // Kernel configuration
+    dim3 blockDim(16, 16);
+    dim3 gridSize((width + blockDim.x - 1) / blockDim.x,
+                  (height + blockDim.y - 1) / blockDim.y);
+
+    // CUDA timing
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    cudaEventRecord(start);
+    sobelFilter<<<gridSize, blockDim>>>(d_inputImage, d_outputImage, width, height);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    float cudaTime = 0;
+    cudaEventElapsedTime(&cudaTime, start, stop);
+
+    checkCudaErrors(cudaMemcpy(h_outputImage, d_outputImage, imageSize, cudaMemcpyDeviceToHost));
+
+    Mat outputImage(height, width, CV_8UC1, h_outputImage);
+    imwrite("/content/output_sobel_cuda.jpg", outputImage);
+
+    // OpenCV Sobel timing
+    Mat opencvOutput;
+    auto startCpu = std::chrono::high_resolution_clock::now();
+    Sobel(grayImage, opencvOutput, CV_8U, 1, 1, 3);
+    auto endCpu = std::chrono::high_resolution_clock::now();
+    double cpuTime = std::chrono::duration<double, std::milli>(endCpu - startCpu).count();
+
+    imwrite("/content/output_sobel_opencv.jpg", opencvOutput);
+
+    printf("Image Size: %d x %d\n", width, height);
+    printf("CUDA Sobel Time: %f ms\n", cudaTime);
+    printf("OpenCV Sobel Time: %f ms\n", cpuTime);
+
+    cudaFree(d_inputImage);
+    cudaFree(d_outputImage);
+    free(h_outputImage);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
+    return 0;
+}
+```
 ## OUTPUT:
-SHOW YOUR OUTPUT HERE
+
+<img width="794" height="277" alt="image" src="https://github.com/user-attachments/assets/3bf3a80f-51be-467a-8a8e-4b5c8105cde3" />
 
 ## RESULT:
 Thus the program has been executed by using CUDA to ________________.
